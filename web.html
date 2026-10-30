@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>B站评论自动回复</title>
+<style>
+:root{--g9:#16181d;--g7:#3b4049;--g5:#6b7280;--g3:#c9ced6;--g2:#e6e8ec;--g1:#f4f5f7;--bg:#fafafb;
+--ac:#2f6fdb;--ac1:#e8f0fd;--ok:#1f8a4c;--ok1:#e5f4ec;--warn:#b26a00;--warn1:#fdf1dc;--bad:#c23b32;--bad1:#fbe7e5}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--g9);font:14px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+.wrap{max-width:1120px;margin:0 auto;padding:28px 20px 60px}
+h1{font-size:20px;margin:0}
+.top{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+.meta{color:var(--g5);font-size:13px;margin-top:6px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 10px;border-radius:99px;font-size:13px;font-weight:600}
+.pill i{width:8px;height:8px;border-radius:50%;background:currentColor;display:inline-block}
+.run{color:var(--ac);background:var(--ac1)} .run i{animation:b 1s infinite}
+.idle{color:var(--g7);background:var(--g2)} .err{color:var(--bad);background:var(--bad1)}
+@keyframes b{50%{opacity:.25}}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:22px 0}
+.stat{background:#fff;border-radius:10px;padding:14px 16px;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.stat b{display:block;font-size:22px;line-height:1.3}
+.stat span{color:var(--g5);font-size:12px}
+.card{background:#fff;border-radius:10px;padding:18px 20px;margin-bottom:18px;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.card h2{font-size:15px;margin:0 0 12px;display:flex;align-items:baseline;gap:10px}
+.card h2 small{color:var(--g5);font-weight:400;font-size:12px}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;color:var(--g5);font-weight:500;font-size:12px;padding:6px 8px;border-bottom:1px solid var(--g2)}
+td{padding:9px 8px;vertical-align:top;border-bottom:1px solid var(--g1)}
+tr.click{cursor:pointer} tr.click:hover td{background:var(--g1)} tr.sel td{background:var(--ac1)}
+.q{color:var(--g7);max-width:300px} .a{max-width:420px}
+.tag{font-size:12px;padding:1px 8px;border-radius:5px;white-space:nowrap}
+.t-reply{color:var(--ok);background:var(--ok1)} .t-skip{color:var(--g5);background:var(--g1)} .t-wait{color:var(--warn);background:var(--warn1)}
+.muted{color:var(--g5);font-size:12px}
+.tools{font:12px/1.6 Consolas,monospace;color:var(--g7);background:var(--g1);border-radius:8px;padding:10px 12px;max-height:260px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+.tools div:first-child{color:var(--ac);font-weight:600}
+.log{font:12px/1.6 Consolas,monospace;color:var(--g7);white-space:pre-wrap;word-break:break-all;max-height:320px;overflow:auto}
+a{color:var(--ac);text-decoration:none}
+.empty{color:var(--g5);padding:18px 0;text-align:center}
+@media(max-width:700px){.stats{grid-template-columns:repeat(2,1fr)}.q,.a{max-width:none}}
+.btn{margin-left:auto;padding:4px 14px;border:1px solid var(--ac);border-radius:6px;background:var(--ac);color:#fff;font:inherit;font-size:13px;cursor:pointer}
+.btn:disabled{background:var(--g3);border-color:var(--g3);cursor:default}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top"><h1>B站评论自动回复</h1><span id="pill" class="pill idle"><i></i>加载中</span><button id="runBtn" class="btn" onclick="runNow()">立即跑一轮</button></div>
+  <div class="meta" id="meta"></div>
+  <div class="stats">
+    <div class="stat"><b id="s1">0</b><span>今天有新评论的轮数</span></div>
+    <div class="stat"><b id="s2">0</b><span>今天已回复</span></div>
+    <div class="stat"><b id="s3">0</b><span>今天跳过</span></div>
+    <div class="stat"><b id="s4">0</b><span>今天用掉的 token</span></div>
+  </div>
+  <div class="card" id="cur">
+    <h2><span id="curTitle">最近一轮</span><small id="curSub"></small></h2>
+    <div id="live"></div>
+    <div id="curRows"></div>
+  </div>
+  <div class="card">
+    <h2>每轮记录<small>点一行看那一轮的评论和回复</small></h2>
+    <div id="rounds"></div>
+  </div>
+  <div class="card">
+    <h2>运行日志<small>state/log.md 最后 40 行</small></h2>
+    <div class="log" id="log"></div>
+  </div>
+</div>
+<script>
+const STAGE={fetch:'正在拉评论',claude:'Claude 正在查数据写回复',post:'正在发回复',idle:'空闲'};
+const RES={ok:'完成',no_new:'没有新评论',no_output:'模型没写输出',login_failed:'登录失效',error:'出错'};
+let pick=null;
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmtStamp=s=>s?s.slice(4,6)+'-'+s.slice(6,8)+' '+s.slice(9,11)+':'+s.slice(11,13):'';
+const kTok=n=>n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(0)+'k':String(n||0);
+const tok=r=>Object.values(r.usage||{}).reduce((a,b)=>a+(b||0),0);
+function rowsHtml(d){
+  if(!d||!d.rows.length)return '<div class="empty">还没有处理过评论</div>';
+  return '<table><tr><th>视频</th><th>用户</th><th>评论</th><th>处理</th><th>回复内容或跳过原因</th></tr>'+d.rows.map(r=>{
+    const t=r.action==='reply'?(r.sent?'<span class="tag t-reply">已回复</span>':'<span class="tag t-wait">待发送</span>'):r.action==='skip'?'<span class="tag t-skip">跳过</span>':'<span class="tag t-wait">处理中</span>';
+    const name=(r.title||r.ep).replace(/^【[^】]*】/,'').slice(0,12);
+    const link=r.bvid?`<a href="https://www.bilibili.com/video/${r.bvid}/#reply${r.rpid}" target="_blank" title="${esc(r.title)}">${esc(name)}</a>`:esc(name);
+    return `<tr><td>${link}</td><td>${esc(r.user)}</td><td class="q">${esc(r.q)}</td><td>${t}</td><td class="a">${esc(r.a)}</td></tr>`}).join('')+'</table>';
+}
+function liveHtml(st,d){
+  if(st.stage==='idle'||!d)return '';
+  const tools=(d.tools||[]).slice(-10).reverse();
+  return `<div class="muted" style="margin-bottom:6px">已调用工具 ${d.tools.length} 次，最新的在最上面</div><div class="tools">${tools.map(t=>'<div>'+esc(t)+'</div>').join('')||'<div>启动中</div>'}</div><div style="height:14px"></div>`;
+}
+async function load(){
+  const j=await (await fetch('/api')).json();
+  const st=j.status, el=document.getElementById('pill');
+  const run=st.stage!=='idle';
+  const rb=document.getElementById('runBtn');rb.disabled=run||Date.now()<runWait;if(!rb.disabled)rb.textContent='立即跑一轮';
+  el.className='pill '+(run?'run':(j.login&&j.login.ok===false?'err':'idle'));
+  const since=run?' · 已 '+Math.round((j.now-st.t)/60)+' 分钟':'';
+  el.innerHTML='<i></i>'+(STAGE[st.stage]||st.stage)+since;
+  const t=j.task||{}, lg=j.login||{};
+  const last=(t.last||'').startsWith('19')?'还没跑过':t.last;
+  document.getElementById('meta').textContent=`每小时一轮 · 下一轮 ${t.next||'?'} · 上一轮 ${last||'?'} · 计划任务 ${t.state==='Running'?'运行中':t.state==='Ready'?'正常':t.state||'?'} · B站账号 ${lg.ok?lg.name+' 登录正常':'登录失效，要更新 cookie'}`;
+  document.getElementById('s1').textContent=j.today.rounds;
+  document.getElementById('s2').textContent=j.today.replied;
+  document.getElementById('s3').textContent=j.today.skipped;
+  document.getElementById('s4').textContent=kTok(j.today.tokens);
+  let d=j.latest;
+  if(pick&&!run){d=await (await fetch('/api/round?stamp='+pick)).json();}
+  document.getElementById('curTitle').textContent=run?'正在处理的这一轮':(pick?'选中的一轮':'最近一轮');
+  document.getElementById('curSub').textContent=d?fmtStamp(d.stamp)+(d.rows?' · '+d.rows.length+' 条评论':''):'';
+  document.getElementById('live').innerHTML=liveHtml(st,d);
+  document.getElementById('curRows').innerHTML=rowsHtml(d);
+  const rs=j.rounds.filter(r=>r.result!=='no_new').slice(0,40);
+  const idle=j.rounds.filter(r=>r.result==='no_new').length;
+  document.getElementById('rounds').innerHTML=(rs.length?'<table><tr><th>时间</th><th>新评论</th><th>回复</th><th>跳过</th><th>用时</th><th>token</th><th>结果</th></tr>'+rs.map(r=>
+    `<tr class="click${pick===r.stamp?' sel':''}" onclick="pick='${r.stamp}';load()"><td>${fmtStamp(r.stamp)}</td><td>${r.new??''}</td><td>${r.replied??''}</td><td>${r.skipped??''}</td><td>${r.sec?Math.round(r.sec/60)+' 分':''}</td><td>${kTok(tok(r))}</td><td>${RES[r.result]||esc(r.result)}</td></tr>`).join('')+'</table>':'<div class="empty">还没有处理过新评论的轮次</div>')+
+    `<div class="muted" style="margin-top:8px">另有 ${idle} 轮没有新评论，没调用模型</div>`;
+  const lg2=document.getElementById('log');lg2.textContent=j.log.join('\n');
+}
+let runWait=0;
+async function runNow(){
+  const rb=document.getElementById('runBtn');rb.disabled=true;rb.textContent='正在启动';
+  const r=await (await fetch('/api/run',{method:'POST'})).json();
+  if(r.ok){runWait=Date.now()+15000;}else{rb.textContent=r.msg;runWait=Date.now()+5000;}
+  setTimeout(load,1500);
+}
+load();setInterval(load,5000);
+</script>
+</body>
+</html>

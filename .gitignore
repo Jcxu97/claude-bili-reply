@@ -1,0 +1,6 @@
+config.toml
+agent.env
+videos.json
+state/
+knowledge/
+__pycache__/

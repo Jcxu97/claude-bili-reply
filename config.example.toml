@@ -1,0 +1,15 @@
+# Copy this file to config.toml and fill in [bili]. config.toml is in .gitignore.
+[agent]
+model = "sonnet"
+effort = "medium"
+timeout_min = 45
+
+# Cookies of the B站 account that owns the videos. Take them from a logged-in browser (F12, Application, Cookies).
+[bili]
+SESSDATA = ""
+bili_jct = ""
+DedeUserID = ""
+DedeUserID__ckMd5 = ""
+buvid3 = ""
+buvid4 = ""
+sid = ""
